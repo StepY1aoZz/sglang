@@ -201,6 +201,9 @@ class ServerArgs:
     hicache_io_backend: str = "kernel"
     hicache_mem_layout: str = "layer_first"
     hicache_storage_backend: Optional[str] = None
+    
+    # CXL cache
+    enable_cxl_cache: bool = False
 
     # Double Sparsity
     enable_double_sparsity: bool = False
@@ -1526,6 +1529,13 @@ class ServerArgs:
             choices=["file", "mooncake", "hf3fs", "nixl"],
             default=ServerArgs.hicache_storage_backend,
             help="The storage backend for hierarchical KV cache.",
+        )
+        
+        # CXL cache
+        parser.add_argument(
+            "--enable-cxl-cache",
+            action="store_true",
+            help="Enable cxl cache",
         )
 
         # Double Sparsity

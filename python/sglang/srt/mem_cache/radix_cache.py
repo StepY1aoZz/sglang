@@ -63,6 +63,8 @@ class TreeNode:
         # store hash values of each pages
         self.hash_value: Optional[List[str]] = None
 
+        self.backuped_cxl = False
+
         self.id = TreeNode.counter if id is None else id
         TreeNode.counter += 1
 
@@ -77,6 +79,15 @@ class TreeNode:
     @property
     def backuped_storage(self):
         return self.hash_value is not None and len(self.hash_value) > 0
+
+    def protect(self):
+        self.lock_ref += 1
+
+    def release(self):
+        if self.lock_ref > 0:
+            self.lock_ref -= 1
+        else:
+            raise RuntimeError("Lock reference counter is already zero.")
 
     def protect_host(self):
         """Protect the host value from eviction."""

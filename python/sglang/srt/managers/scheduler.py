@@ -130,6 +130,7 @@ from sglang.srt.managers.utils import DPBalanceMeta, validate_input_length
 from sglang.srt.mem_cache.chunk_cache import ChunkCache, SWAChunkCache
 from sglang.srt.mem_cache.hiradix_cache import HiRadixCache
 from sglang.srt.mem_cache.radix_cache import RadixCache
+from sglang.srt.mem_cache.cxl_radix_cache import CXLRadixCache
 from sglang.srt.mem_cache.swa_radix_cache import SWARadixCache
 from sglang.srt.model_executor.forward_batch_info import ForwardMode, PPProxyTensors
 from sglang.srt.reasoning_parser import ReasoningParser
@@ -231,6 +232,7 @@ class Scheduler(
         )
         self.gpu_id = gpu_id
         self.enable_hierarchical_cache = server_args.enable_hierarchical_cache
+        self.enable_cxl_cache = server_args.enable_cxl_cache # TODO: add this into server args
         self.enable_hicache_storage = server_args.hicache_storage_backend is not None
         self.page_size = server_args.page_size
 
@@ -631,7 +633,13 @@ class Scheduler(
                     page_size=self.page_size,
                     disable=server_args.disable_radix_cache,
                 )
-
+            elif self.enable_cxl_cache: # TODO: add the server args, check the cxl args here
+                self.tree_cache = CXLRadixCache(
+                    req_to_token_pool=self.req_to_token_pool,
+                    token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+                    page_size=self.page_size,
+                )
+                
             else:
                 self.tree_cache = RadixCache(
                     req_to_token_pool=self.req_to_token_pool,
@@ -1234,7 +1242,7 @@ class Scheduler(
             self.waiting_queue.append(req)
 
     def _prefetch_kvcache(self, req: Req):
-        if self.enable_hicache_storage:
+        if self.enable_hicache_storage or self.enable_cxl_cache:
             req.init_next_round_input(self.tree_cache)
             last_hash = req.last_host_node.get_last_hash_value()
             matched_len = len(req.prefix_indices) + req.host_hit_length
@@ -1511,7 +1519,7 @@ class Scheduler(
             self.running_batch.batch_is_full = True
             return None
 
-        if self.enable_hierarchical_cache:
+        if self.enable_hierarchical_cache or self.enable_cxl_cache:
             self.tree_cache.check_hicache_events()
 
         # Get priority queue
@@ -1561,15 +1569,15 @@ class Scheduler(
                     self.running_batch.batch_is_full = True
                     break
 
-            if self.enable_hicache_storage:
-                self.tree_cache.check_prefetch_progress(req.rid)
+            if self.enable_hicache_storage or self.enable_cxl_cache:
+                self.tree_cache.check_prefetch_progress(req.rid) # new host node inserted
 
             req.init_next_round_input(self.tree_cache)
             res = adder.add_one_req(req, has_chunked_req=(self.chunked_req is not None))
 
             if res != AddReqResult.CONTINUE:
                 if res == AddReqResult.NO_TOKEN:
-                    if self.enable_hierarchical_cache:
+                    if self.enable_hierarchical_cache or self.enable_cxl_cache:
                         # Set batch_is_full after making sure there are requests that can be served
                         self.running_batch.batch_is_full = len(
                             adder.can_run_list
@@ -1616,6 +1624,7 @@ class Scheduler(
             chunked_req=self.chunked_req,
         )
         if self.enable_hierarchical_cache:
+            # NOTE: seemed we dont need this
             # todo (zhiqiang): disable cuda graph execution if hicache loading triggered
             new_batch.hicache_consumer_index = (
                 self.tree_cache.ready_to_load_host_cache()

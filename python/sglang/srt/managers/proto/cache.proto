@@ -1,0 +1,47 @@
+syntax = "proto2";
+option go_package = "cxl_manager/rpc/proto";
+import "google/protobuf/empty.proto";
+service Cache {
+    rpc GetStart(GetStartRequest) returns (GetStartReply) {}
+    rpc GetEnd (GetEndRequest) returns (google.protobuf.Empty) {}
+
+    rpc PutStart(PutStartRequest) returns (PutStartReply) {}
+    rpc PutEnd (PutEndRequest) returns (google.protobuf.Empty) {}
+}
+
+message GetStartRequest {
+    repeated bytes keys = 1;
+}
+
+message Handle {
+    required bytes key = 1;
+    required uint64 offset = 2; // offset in CXL where the value is stored
+    required uint64 len = 3; // length of the value
+}
+
+message GetStartReply {
+    required uint64 batchID = 1; // unique id for this batch operation, used to match with GetEndRequest
+    repeated Handle handles = 2; // handles for each key, if not found, their handle will not be included
+}
+
+message GetEndRequest {
+    required uint64 batchID = 1; // unique id for this batch operation, used to match with GetStartReply
+
+    // indicates whether the client has revoked the handles, it may occuried if the device mem alloc failed
+    required bool revoked = 2;
+}
+
+message PutStartRequest {
+    repeated bytes keys = 1; // keys to be stored
+    repeated uint64 lens = 2; // space lens need to alloc
+}
+
+message PutStartReply {
+    required uint64 batchID = 1; // unique id for this batch operation, used to match with PutEndRequest
+    repeated uint64 offsets = 2; // offsets in CXL where the values should be stored, the order matches PutStartRequest but length does not
+    repeated bool exists = 3; // same as offsets
+}
+
+message PutEndRequest {
+    required uint64 batchID = 1; // unique id for this batch operation, used to match with PutStartReply
+}

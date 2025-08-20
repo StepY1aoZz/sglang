@@ -174,6 +174,7 @@ class StorageOperation:
         self.last_hash = last_hash
         self.completed_tokens = 0
         self.hash_value = []
+        self.batch_id = 0  # used for RPC batch operations
 
         self.id = StorageOperation.counter
         StorageOperation.counter += 1
@@ -243,12 +244,12 @@ class HiCacheController:
                 self.storage_backend = HiCacheFile()
                 self.get_hash_str = get_hash_str
             elif storage_backend == "nixl":
-                from sglang.srt.mem_cache.nixl.hicache_nixl import HiCacheNixl
+                from sglang.srt.mem_cache.storage.nixl.hicache_nixl import HiCacheNixl
 
                 self.storage_backend = HiCacheNixl()
                 self.get_hash_str = get_hash_str
             elif storage_backend == "mooncake":
-                from sglang.srt.mem_cache.mooncake_store.mooncake_store import (
+                from sglang.srt.mem_cache.storage.mooncake_store.mooncake_store import (
                     MooncakeStore,
                     get_hash_str_mooncake,
                 )

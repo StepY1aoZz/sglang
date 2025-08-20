@@ -158,6 +158,9 @@ class KVCache(abc.ABC):
     def load_cpu_copy(self, kv_cache_cpu, indices):
         raise NotImplementedError()
 
+    def get_kv_buffer_shape(self):
+        raise NotImplementedError()
+
 
 class MHATokenToKVPool(KVCache):
 
@@ -415,6 +418,12 @@ class MHATokenToKVPool(KVCache):
             len(tgt_loc),
             next_power_of_2(len(tgt_loc)),
         )
+
+    def get_kv_buffer_shape(self):
+        return (
+            self.k_buffer[0].shape[1:],
+            self.v_buffer[0].shape[1:],
+        )  # [head_num, head_dim]
 
 
 class SWAKVPool(KVCache):
@@ -878,6 +887,9 @@ class MLATokenToKVPool(KVCache):
                 kv_chunk = kv_cpu.to(self.kv_buffer[0].device, non_blocking=True)
                 self.kv_buffer[layer_id][chunk_indices] = kv_chunk
         torch.cuda.synchronize()
+
+    def get_kv_buffer_shape(self):
+        return self.k_buffer[0].shape[1:]
 
 
 class AscendMLAPagedTokenToKVPool(MLATokenToKVPool):
