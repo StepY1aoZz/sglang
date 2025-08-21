@@ -159,14 +159,15 @@ class CXLRadixCache(RadixCache):
                 self.cache_controller.ack_backup_queue.get()
             )
             node = self.ongoing_backup[ack_id]
-            if completed_tokens == 0:
-                node.hash_value = None
+            #FIXME: node lock and release, node writed or not? double check here.
+            if completed_tokens == 0 :
+                node.backuped_cxl = False
             elif completed_tokens < len(node.key):
                 # backup is only partially successful, split the node
                 new_node = self._split_node(node.key, node, completed_tokens)
-                new_node.hash_value = hash_value
+                new_node.backuped_cxl = True
             else:
-                node.hash_value = hash_value
+                node.backuped_cxl = True
             node.release()
             del self.ongoing_backup[ack_id]
 

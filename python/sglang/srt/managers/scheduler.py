@@ -130,7 +130,7 @@ from sglang.srt.managers.utils import DPBalanceMeta, validate_input_length
 from sglang.srt.mem_cache.chunk_cache import ChunkCache, SWAChunkCache
 from sglang.srt.mem_cache.hiradix_cache import HiRadixCache
 from sglang.srt.mem_cache.radix_cache import RadixCache
-from sglang.srt.mem_cache.cxl_radix_cache import CXLRadixCache
+from sglang.srt.mem_cache.cxl_radix_cache_new import CXLRadixCache
 from sglang.srt.mem_cache.swa_radix_cache import SWARadixCache
 from sglang.srt.model_executor.forward_batch_info import ForwardMode, PPProxyTensors
 from sglang.srt.reasoning_parser import ReasoningParser
@@ -638,6 +638,13 @@ class Scheduler(
                     req_to_token_pool=self.req_to_token_pool,
                     token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
                     page_size=self.page_size,
+                    tp_cache_group=(
+                        self.attn_tp_cpu_group
+                        if self.server_args.enable_dp_attention
+                        else self.tp_cpu_group
+                    ),
+                    cxl_rpc_addr=server_args.cxl_rpc_addr,
+                    io_backend=server_args.hicache_io_backend
                 )
                 
             else:
@@ -1252,6 +1259,8 @@ class Scheduler(
                 self.tree_cache.prefetch_from_storage(
                     req.rid, req.last_host_node, new_input_tokens, last_hash
                 )
+            else:
+                logger.info(f"jumped prefetch, matched_len is {matched_len}, and last hash is {last_hash}")
 
     def _extend_requests_to_queue(self, reqs: List[Req], is_retracted: bool = False):
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
@@ -1338,7 +1347,7 @@ class Scheduler(
             protected_size = self.tree_cache.protected_size()
             memory_leak = (available_size + evictable_size) != (
                 self.max_total_num_tokens
-                if not self.enable_hierarchical_cache
+                if not (self.enable_hierarchical_cache or self.enable_cxl_cache)
                 else self.max_total_num_tokens - protected_size
             )
             token_msg = f"{self.max_total_num_tokens=}, {available_size=}, {evictable_size=}, {protected_size=}\n"

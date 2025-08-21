@@ -14,9 +14,7 @@ from sglang.srt.mem_cache.memory_pool import (
     MHATokenToKVPool,
     MLATokenToKVPool,
 )
-
-if TYPE_CHECKING:
-    from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
+from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +83,7 @@ class CXLCacheController:
                 group_ranks, backend="gloo"
             )
         self.layer_done_counter = None
+        self.stop_event = threading.Event()
 
         self.prefetch_thread = threading.Thread(
             target=self.prefetch_thread_func, daemon=True
@@ -110,6 +109,8 @@ class CXLCacheController:
         self.backup_queue.queue.clear()
         self.prefetch_revoke_queue.queue.clear()
         self.ack_backup_queue.queue.clear()
+
+        self.stop_event.clear()
 
         self.prefetch_thread = threading.Thread(
             target=self.prefetch_thread_func, daemon=True
@@ -292,7 +293,7 @@ class CXLCacheController:
             raise ValueError("Unsupported memory pool device type")
 
     def write_backup_cxl(self, value: torch.Tensor, hash_value: List[str]):
-        operation = StorageOperation(value)
+        operation = StorageOperation(value, None)
         operation.hash_value = hash_value
         self.backup_queue.put(operation)
         return operation.id
@@ -353,19 +354,18 @@ class CXLCacheController:
 
         # 2. write data to cxl
         data = []
-        for i in range(exists):
+        for i in range(len(exists)):
             if exists[i]:
                 continue
             index = indicies[i * self.page_size]
             data.extend(self._get_device_data_pages(index))
             self.cxl_client.write_to_cxl(
                 offsets[i],
-                data,
                 raw_length_per_page,
+                data,
                 isinstance(self.mem_pool_device, MHATokenToKVPool),
             )  # layer first (2, layer_num, page_size, ..,..)
-
-        operation.increment(len(offsets) * self.page_size)
+        operation.completed_tokens += self.page_size * len(offsets)
         self.cxl_client.put_end(operation.batch_id)
 
     def _get_device_data_pages(self, start_index: int) -> List[torch.Tensor]:
@@ -375,13 +375,15 @@ class CXLCacheController:
         data = []
         if isinstance(self.mem_pool_device, MHATokenToKVPool):
             for j in range(self.mem_pool_device.layer_num):
-                data.append(
-                    self.mem_pool_device.k_buffer[j][
-                        start_index : start_index + self.page_size, :, :
-                    ],
-                    self.mem_pool_device.v_buffer[j][
-                        start_index : start_index + self.page_size, :, :
-                    ],
+                data.extend(
+                    [
+                        self.mem_pool_device.k_buffer[j][
+                            start_index : start_index + self.page_size, :, :
+                        ],
+                        self.mem_pool_device.v_buffer[j][
+                            start_index : start_index + self.page_size, :, :
+                        ],
+                    ]
                 )
         elif isinstance(self.mem_pool_device, MLATokenToKVPool):
             for j in range(self.mem_pool_device.layer_num):

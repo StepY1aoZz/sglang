@@ -204,6 +204,7 @@ class ServerArgs:
     
     # CXL cache
     enable_cxl_cache: bool = False
+    cxl_rpc_addr: str = "127.0.0.1:50051"
 
     # Double Sparsity
     enable_double_sparsity: bool = False
@@ -1536,6 +1537,12 @@ class ServerArgs:
             "--enable-cxl-cache",
             action="store_true",
             help="Enable cxl cache",
+        )
+        parser.add_argument(
+            "--cxl-rpc-addr",
+            type=str,
+            default=ServerArgs.cxl_rpc_addr,
+            help="The RPC address for CXL cache",
         )
 
         # Double Sparsity

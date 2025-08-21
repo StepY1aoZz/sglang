@@ -24,9 +24,10 @@ class CXLManager:
         self.cxl_dev_path = cxl_dev_path
 
         if cxl_dev_size is None:
-            cxl_dev_size = os.getenv("SGL_CXL_DEV_SIZE")
+            cxl_dev_size = int(os.getenv("SGL_CXL_DEV_SIZE"))
             if cxl_dev_size is None:
                 raise ValueError("CXL device size must be specified.")
+            
         self.cxl_dev_size = cxl_dev_size
 
         self.f = open(self.cxl_dev_path, "w+b")
@@ -72,7 +73,7 @@ class CXLManager:
 
 # manage the cxl mmap object and rpc call to manager
 class CXLClient:
-    def __init__(self, cxl_rpc_addr: str, cxl_path: str, cxl_size: int):
+    def __init__(self, cxl_rpc_addr: str, cxl_path: str = None, cxl_size: int = None):
         self.cxl_rpc_addr = cxl_rpc_addr
         self.channel = grpc.insecure_channel(self.cxl_rpc_addr)
         self.client = cache_pb2_grpc.CacheStub(self.channel)
