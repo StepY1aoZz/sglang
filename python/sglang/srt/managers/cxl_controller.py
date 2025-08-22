@@ -27,7 +27,7 @@ class CXLManager:
             cxl_dev_size = int(os.getenv("SGL_CXL_DEV_SIZE"))
             if cxl_dev_size is None:
                 raise ValueError("CXL device size must be specified.")
-            
+
         self.cxl_dev_size = cxl_dev_size
 
         self.f = open(self.cxl_dev_path, "w+b")
@@ -86,7 +86,10 @@ class CXLClient:
         return res.batchID, res.handles
 
     def get_tensor_to_read(
-        self, operation: "CXLPrefetchOperation", shape: torch.Size = None
+        self,
+        operation: "CXLPrefetchOperation",
+        shape: torch.Size = None,
+        target_dtype: torch.dtype = None,
     ):
         """
         reshape cxl data to tensor for reading data into dram
@@ -95,7 +98,7 @@ class CXLClient:
         for handle in operation.data:  # handle:(offset int, len int)
             offset = handle.offset
             length = handle.len  # count in bytes
-            tensor = self.manager.get_from(offset, raw_size=length)
+            tensor = self.manager.get_from(offset, raw_size=length, dtype=target_dtype)
             if shape is not None:
                 tensor = tensor.view(shape)
             flat_pages.append(tensor)
@@ -117,11 +120,14 @@ class CXLClient:
         else:
             stop = len(data)
         size_per_layer = raw_length // len(data)
+        assert (
+            size_per_layer == data[0].numel() * data[0].element_size()
+        ), "Size mismatch"
         for i in range(stop):
             if is_mha:
-                self.manager.set_to(offset + i * size_per_layer, data[i])  # k cache
+                self.manager.set_to(offset + i * size_per_layer, data[2 * i])  # k cache
                 self.manager.set_to(
-                    offset + raw_length // 2 + i * size_per_layer, data[i + 1]
+                    offset + raw_length // 2 + i * size_per_layer, data[2 * i + 1]
                 )  # v cache
             else:
                 self.manager.set_to(offset + i * size_per_layer, data[i])  # kv cache
@@ -174,7 +180,7 @@ if __name__ == "__main__":
     new_data = cxl_client.manager.get_from(0, raw_size=raw_size, dtype=dtype)
     if torch.equal(new_data, layer_first):
         print("is layer first")
-    if torch.equal(new_data,page_first):
+    if torch.equal(new_data, page_first):
         print("is page first")
 
     # Test 3

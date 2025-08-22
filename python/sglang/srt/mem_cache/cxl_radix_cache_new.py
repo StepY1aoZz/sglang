@@ -50,7 +50,7 @@ class CXLRadixCache(RadixCache):
 
         self.io_backend = io_backend
         self.write_threshold = 3
-        self.prefetch_threshold = 64  # TODO: validate the value here
+        self.prefetch_threshold = 8 
         self.cxl_rpc_addr = cxl_rpc_addr
         self.cxl_client = CXLClient(
             cxl_rpc_addr=cxl_rpc_addr,
