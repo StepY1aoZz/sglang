@@ -80,15 +80,6 @@ class TreeNode:
     def backuped_storage(self):
         return self.hash_value is not None and len(self.hash_value) > 0
 
-    def protect(self):
-        self.lock_ref += 1
-
-    def release(self):
-        if self.lock_ref > 0:
-            self.lock_ref -= 1
-        else:
-            raise RuntimeError("Lock reference counter is already zero.")
-
     def protect_host(self):
         """Protect the host value from eviction."""
         self.host_ref_counter += 1
@@ -357,6 +348,21 @@ class RadixCache(BasePrefixCache):
             node.lock_ref -= 1
             node = node.parent
         return delta
+
+    def protect(self, node: TreeNode):
+        node.lock_ref += 1
+        if node.lock_ref == 1:
+            self.evictable_size_ -= len(node.value)
+            self.protected_size_ += len(node.value)
+
+    def release(self, node: TreeNode):
+        if node.lock_ref > 0:
+            node.lock_ref -= 1
+            if node.lock_ref == 0:
+                self.evictable_size_ += len(node.value)
+                self.protected_size_ -= len(node.value)
+        else:
+            raise RuntimeError("Lock reference counter is already zero.")
 
     def evictable_size(self):
         return self.evictable_size_

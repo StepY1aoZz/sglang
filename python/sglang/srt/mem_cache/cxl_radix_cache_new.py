@@ -168,7 +168,7 @@ class CXLRadixCache(RadixCache):
                 new_node.backuped_cxl = True
             else:
                 node.backuped_cxl = True
-            node.release()
+            self.release(node)
             del self.ongoing_backup[ack_id]
 
     def check_revoked_prefetch(self):
@@ -290,7 +290,7 @@ class CXLRadixCache(RadixCache):
             node.value, node.hash_value
         )
         self.ongoing_backup[operation_id] = node
-        node.protect()  # HACK remember to release this
+        self.protect(node)  # HACK remember to release this
 
     def _insert_helper(self, node: TreeNode, key: List, value):
         node.last_access_time = time.monotonic()
