@@ -166,6 +166,7 @@ class CXLRadixCache(RadixCache):
                 # backup is only partially successful, split the node
                 new_node = self._split_node(node.key, node, completed_tokens)
                 new_node.backuped_cxl = True
+                self.release(new_node)
             else:
                 node.backuped_cxl = True
             self.release(node)
