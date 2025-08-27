@@ -1,5 +1,5 @@
 import logging
-import math
+import os
 import threading
 from queue import Empty, Full, PriorityQueue, Queue
 from typing import TYPE_CHECKING, List, Optional
@@ -237,7 +237,6 @@ class CXLCacheController:
         )
         self._load_from_cxl_all_layer(flat_pages, operation.host_indices)
 
-        torch.cuda.synchronize()
         operation.increment(
             len(operation.hash_value) * self.page_size
         )  # NOTE: we also assume no fail in this period
@@ -364,8 +363,8 @@ class CXLCacheController:
                 continue
             index = indicies[i * self.page_size]
             data = self._get_device_data_pages(index)
-            logger.debug(
-                f"Writing to CXL: {hash_value[i]}, progress:{i}/{len(exists)}, data: {data[0]}... with length {len(data)}, data[0] shape {data[0].shape}"
+            logger.info(
+                f"Writing to CXL: {hash_value[i]}, progress:{i}/{len(exists)}, data length {len(data)}, data[0] shape {data[0].shape}"
             )
             self.cxl_client.write_to_cxl(
                 offsets[i],

@@ -351,14 +351,14 @@ class RadixCache(BasePrefixCache):
 
     def protect(self, node: TreeNode):
         node.lock_ref += 1
-        if node.lock_ref == 1:
+        if node.lock_ref == 1 and node != self.root_node:
             self.evictable_size_ -= len(node.value)
             self.protected_size_ += len(node.value)
 
     def release(self, node: TreeNode):
         if node.lock_ref > 0:
             node.lock_ref -= 1
-            if node.lock_ref == 0:
+            if node.lock_ref == 0 and node != self.root_node:
                 self.evictable_size_ += len(node.value)
                 self.protected_size_ -= len(node.value)
         else:

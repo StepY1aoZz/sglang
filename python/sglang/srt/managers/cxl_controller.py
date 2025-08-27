@@ -68,7 +68,7 @@ class CXLManager:
         # data = data.contiguous() not sure if we need this
         raw_size = data.numel() * data.element_size()
         ts = torch.frombuffer(self.mv[offset : offset + raw_size], dtype=torch.uint8)
-        ts.copy_(data.flatten().view(dtype=torch.uint8))
+        ts.copy_(data.flatten().view(dtype=torch.uint8),non_blocking=True)
 
 
 # manage the cxl mmap object and rpc call to manager

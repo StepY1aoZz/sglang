@@ -49,8 +49,8 @@ class CXLRadixCache(RadixCache):
         )
 
         self.io_backend = io_backend
-        self.write_threshold = 3
-        self.prefetch_threshold = 8 
+        self.write_threshold = 6 # NOTE: when this is small, may add duplicate write backup.
+        self.prefetch_threshold = 8
         self.cxl_rpc_addr = cxl_rpc_addr
         self.cxl_client = CXLClient(
             cxl_rpc_addr=cxl_rpc_addr,
@@ -159,8 +159,8 @@ class CXLRadixCache(RadixCache):
                 self.cache_controller.ack_backup_queue.get()
             )
             node = self.ongoing_backup[ack_id]
-            #FIXME: node lock and release, node writed or not? double check here.
-            if completed_tokens == 0 :
+            # FIXME: node lock and release, node writed or not? double check here.
+            if completed_tokens == 0:
                 node.backuped_cxl = False
             elif completed_tokens < len(node.key):
                 # backup is only partially successful, split the node
@@ -168,7 +168,9 @@ class CXLRadixCache(RadixCache):
                 new_node.backuped_cxl = True
                 self.release(new_node)
             else:
-                node.backuped_cxl = True
+                # TODO: Is there any chance that a node is splited when being writing to cxl? 
+                # if so, the completied tokens can be bigger than len(key)
+                node.backuped_cxl = True  
             self.release(node)
             del self.ongoing_backup[ack_id]
 
@@ -268,7 +270,9 @@ class CXLRadixCache(RadixCache):
             fetched_token_ids,
             written_indices,
         )
-        self.token_to_kv_pool_allocator.free(device_indices[:matched_length])
+        self.token_to_kv_pool_allocator.free(
+            device_indices[:matched_length]
+        )  # FIXME: When many same req come together, we may do a lot useless copy here.
         self.token_to_kv_pool_allocator.free(
             device_indices[min_completed_tokens:completed_tokens]
         )
@@ -286,7 +290,9 @@ class CXLRadixCache(RadixCache):
                 self.write_backup_cxl(node)
 
     def write_backup_cxl(self, node: TreeNode):
-        assert node.hash_value is not None, "every node should have a hash value"
+        assert (
+            node.hash_value is not None and len(node.hash_value) != 0
+        ), "every node should have a hash value"
         operation_id = self.cache_controller.write_backup_cxl(
             node.value, node.hash_value
         )
@@ -331,7 +337,7 @@ class CXLRadixCache(RadixCache):
             new_node.host_value = None
             new_node.hash_value = self._get_node_hash_fn(
                 key, node.get_last_hash_value()
-            ) 
+            )
             node.children[child_key] = new_node
             self.evictable_size_ += len(value)
             self.inc_hit_count(new_node)
