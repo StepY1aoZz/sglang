@@ -3,7 +3,7 @@ import os
 import threading
 from queue import Empty, Full, PriorityQueue, Queue
 from typing import TYPE_CHECKING, List, Optional
-from sglang.srt.managers.cache_controller import StorageOperation
+from sglang.srt.managers.cache_controller import StorageOperation, PrefetchOperation
 from sglang.srt.managers.cxl_controller import CXLClient
 
 import torch
@@ -235,11 +235,8 @@ class CXLCacheController:
         logger.debug(
             f"prefetch data: {flat_pages[0]}, data length: {len(flat_pages)}, data[0] shape: {flat_pages[0].shape}"
         )
-        self._load_from_cxl_all_layer(flat_pages, operation.host_indices)
+        self._load_from_cxl_all_layer(flat_pages, operation)
 
-        operation.increment(
-            len(operation.hash_value) * self.page_size
-        )  # NOTE: we also assume no fail in this period
         self.cxl_client.get_end(operation.batch_id)
         operation.done_event.set()
 
@@ -260,8 +257,9 @@ class CXLCacheController:
             raise ValueError("Unsupported memory pool device type")
 
     def _load_from_cxl_all_layer(
-        self, flat_pages: List[torch.Tensor], indices: torch.Tensor
+        self, flat_pages: List[torch.Tensor], operation: CXLPrefetchOperation
     ):
+        indices = operation.host_indices
         logger.debug(f"trying to load into mem pool: {indices.tolist()}")
         logger.debug(f"flat pages: {len(flat_pages)}")
         logger.debug(f"page shape: {flat_pages[0].shape}")
@@ -284,6 +282,12 @@ class CXLCacheController:
                         flat_pages[i // self.page_size][1, j, :, :, :],
                         non_blocking=True,
                     )
+                if not operation.increment(self.page_size):
+                    # terminated
+                    self.mem_pool_device_allocator.free(
+                        indices[operation.completed_tokens :]
+                    )
+                    break
         elif isinstance(self.mem_pool_device, MLATokenToKVPool):
             for i in range(0, len(indices), self.page_size):
                 index = indices[i]
@@ -294,11 +298,17 @@ class CXLCacheController:
                         flat_pages[i // self.page_size][j, :, :, :],
                         non_blocking=True,
                     )
+                if not operation.increment(self.page_size):
+                    # terminated
+                    self.mem_pool_device_allocator.free(
+                        indices[operation.completed_tokens :]
+                    )
+                    break
         else:
             raise ValueError("Unsupported memory pool device type")
 
     def write_backup_cxl(self, value: torch.Tensor, hash_value: List[str]):
-        operation = StorageOperation(value, None)
+        operation = PrefetchOperation(None, value, None)
         operation.hash_value = hash_value
         self.backup_queue.put(operation)
         return operation.id
@@ -335,9 +345,9 @@ class CXLCacheController:
             except Empty:
                 continue
 
-    def write_cxl_page(self, operation: StorageOperation):
+    def write_cxl_page(self, operation: PrefetchOperation):
         hash_value = operation.hash_value
-        indicies = operation.host_indices
+        indices = operation.host_indices
         size_per_page = self._get_shape_helper()[-4:]  # (layer_num, page_size, .. , ..)
 
         if isinstance(self.mem_pool_device, MHATokenToKVPool):
@@ -361,7 +371,7 @@ class CXLCacheController:
         for i in range(len(exists)):
             if exists[i]:
                 continue
-            index = indicies[i * self.page_size]
+            index = indices[i * self.page_size]
             data = self._get_device_data_pages(index)
             logger.info(
                 f"Writing to CXL: {hash_value[i]}, progress:{i}/{len(exists)}, data length {len(data)}, data[0] shape {data[0].shape}"
@@ -442,7 +452,7 @@ if __name__ == "__main__":
 
     operation = StorageOperation(None, None)
     handle = namedtuple("handle", ["offset", "len"])
-    operation.data = [handle(0, raw_length_per_page*2)]
+    operation.data = [handle(0, raw_length_per_page * 2)]
     flat_pages = cxl_client.get_tensor_to_read(
         operation,
         shape=torch.Size([2, layer_num, page_size, head_num, head_dim]),
@@ -464,8 +474,11 @@ if __name__ == "__main__":
                 non_blocking=False,
             )
 
-    print(new_slot_v[0],fake_mha_mem_pool_v[i][start_index : start_index + page_size, :, :])
-    
+    print(
+        new_slot_v[0],
+        fake_mha_mem_pool_v[i][start_index : start_index + page_size, :, :],
+    )
+
     for i in range(len(new_slot_v)):
         assert torch.equal(
             new_slot_v[i],

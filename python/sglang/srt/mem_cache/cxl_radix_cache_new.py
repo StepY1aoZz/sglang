@@ -49,7 +49,9 @@ class CXLRadixCache(RadixCache):
         )
 
         self.io_backend = io_backend
-        self.write_threshold = 6 # NOTE: when this is small, may add duplicate write backup.
+        self.write_threshold = (
+            6  # NOTE: when this is small, may add duplicate write backup.
+        )
         self.prefetch_threshold = 8
         self.cxl_rpc_addr = cxl_rpc_addr
         self.cxl_client = CXLClient(
@@ -168,9 +170,9 @@ class CXLRadixCache(RadixCache):
                 new_node.backuped_cxl = True
                 self.release(new_node)
             else:
-                # TODO: Is there any chance that a node is splited when being writing to cxl? 
+                # TODO: Is there any chance that a node is splited when being writing to cxl?
                 # if so, the completied tokens can be bigger than len(key)
-                node.backuped_cxl = True  
+                node.backuped_cxl = True
             self.release(node)
             del self.ongoing_backup[ack_id]
 
@@ -239,8 +241,7 @@ class CXLRadixCache(RadixCache):
         if req_id not in self.ongoing_prefetch:
             # there is no ongoing prefetch for this request or it has been revoked
             return
-
-        self.prefetch_done_events[req_id].wait()  # wait for all prefetch done
+        self.prefetch_done_events[req_id].wait(0.1)  # wait for all prefetch done
 
         # todo: more policies for prefetch progress such as timeout
         # the current policy is to prefetch with best effort and terminate when queuing is over
