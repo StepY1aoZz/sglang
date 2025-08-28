@@ -118,6 +118,7 @@ class SchedulerMetricsMixin:
             self.stats.num_used_tokens = num_used
             self.stats.token_usage = round(token_usage, 2)
             self.stats.num_queue_reqs = len(self.waiting_queue)
+            self.stats.cache_hit_count += adder.log_hit_tokens
             self.stats.cache_hit_rate = cache_hit_rate
 
             total_queue_latency = 0
