@@ -50,7 +50,7 @@ class CXLRadixCache(RadixCache):
 
         self.io_backend = io_backend
         self.write_threshold = (
-            6  # NOTE: when this is small, may add duplicate write backup.
+            4  # NOTE: when this is small, may add duplicate write backup, locking too many TreeNode.
         )
         self.prefetch_threshold = 8
         self.cxl_rpc_addr = cxl_rpc_addr
