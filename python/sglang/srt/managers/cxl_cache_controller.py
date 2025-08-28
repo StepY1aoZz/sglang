@@ -99,6 +99,9 @@ class CXLCacheController:
 
         self.prefetch_thread.start()
         self.backup_thread.start()
+        
+        self.write_stream = torch.cuda.Stream()
+        self.load_stream = torch.cuda.Stream()
 
     def reset(self):
         self.stop_event.set()
@@ -135,6 +138,7 @@ class CXLCacheController:
         operation = CXLPrefetchOperation(
             request_id, device_indices, new_input_tokens, done_event, last_hash
         )
+        torch.cuda.current_stream().synchronize()
         self.prefetch_queue.put(operation)
         return operation
 
@@ -213,10 +217,12 @@ class CXLCacheController:
         """
         Auxiliary function conducting IO operations for prefetching.
         """
+        torch.cuda.set_stream(self.load_stream)
         while not self.stop_event.is_set():
             try:
                 operation = self.prefetch_buffer.get(block=True, timeout=1)
                 self.load_cxl_page(operation)
+                self.load_stream.synchronize()
             except Empty:
                 continue
 
@@ -310,10 +316,12 @@ class CXLCacheController:
     def write_backup_cxl(self, value: torch.Tensor, hash_value: List[str]):
         operation = PrefetchOperation(None, value, None)
         operation.hash_value = hash_value
+        torch.cuda.current_stream().synchronize()
         self.backup_queue.put(operation)
         return operation.id
 
     def backup_thread_func(self):
+        torch.cuda.set_stream(self.write_stream)
         while not self.stop_event.is_set():
             try:
                 operation = self.backup_queue.get(block=True, timeout=1)
@@ -322,6 +330,7 @@ class CXLCacheController:
 
                 self.write_cxl_page(operation)
 
+                self.write_stream.synchronize()
                 min_completed_tokens = operation.completed_tokens
                 if self.tp_world_size > 1:
                     completed_tokens_tensor = torch.tensor(
