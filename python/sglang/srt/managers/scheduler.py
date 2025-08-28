@@ -232,7 +232,9 @@ class Scheduler(
         )
         self.gpu_id = gpu_id
         self.enable_hierarchical_cache = server_args.enable_hierarchical_cache
-        self.enable_cxl_cache = server_args.enable_cxl_cache # TODO: add this into server args
+        self.enable_cxl_cache = (
+            server_args.enable_cxl_cache
+        )  # TODO: add this into server args
         self.enable_hicache_storage = server_args.hicache_storage_backend is not None
         self.page_size = server_args.page_size
 
@@ -633,7 +635,9 @@ class Scheduler(
                     page_size=self.page_size,
                     disable=server_args.disable_radix_cache,
                 )
-            elif self.enable_cxl_cache: # TODO: add the server args, check the cxl args here
+            elif (
+                self.enable_cxl_cache
+            ):  # TODO: add the server args, check the cxl args here
                 self.tree_cache = CXLRadixCache(
                     req_to_token_pool=self.req_to_token_pool,
                     token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
@@ -644,9 +648,9 @@ class Scheduler(
                         else self.tp_cpu_group
                     ),
                     cxl_rpc_addr=server_args.cxl_rpc_addr,
-                    io_backend=server_args.hicache_io_backend
+                    io_backend=server_args.hicache_io_backend,
                 )
-                
+
             else:
                 self.tree_cache = RadixCache(
                     req_to_token_pool=self.req_to_token_pool,
@@ -1260,7 +1264,9 @@ class Scheduler(
                     req.rid, req.last_host_node, new_input_tokens, last_hash
                 )
             else:
-                logger.info(f"jumped prefetch, matched_len is {matched_len}, and last hash is {last_hash}")
+                logger.info(
+                    f"jumped prefetch, matched_len is {matched_len}, and last hash is {last_hash}"
+                )
 
     def _extend_requests_to_queue(self, reqs: List[Req], is_retracted: bool = False):
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
@@ -1352,7 +1358,9 @@ class Scheduler(
             )
             token_msg = f"{self.max_total_num_tokens=}, {available_size=}, {evictable_size=}, {protected_size=}\n"
 
-        if memory_leak and not self.enable_cxl_cache: #FIXME: temporary disable the memory leak check, need to calculate the ongoing prefetch length
+        if (
+            memory_leak and not self.enable_cxl_cache
+        ):  # FIXME: temporary disable the memory leak check, need to calculate the ongoing prefetch length
             msg = "token_to_kv_pool_allocator memory leak detected! " f"{token_msg}"
             raise ValueError(msg)
 
@@ -1579,7 +1587,9 @@ class Scheduler(
                     break
 
             if self.enable_hicache_storage or self.enable_cxl_cache:
-                self.tree_cache.check_prefetch_progress(req.rid) # new host node inserted
+                self.tree_cache.check_prefetch_progress(
+                    req.rid
+                )  # new host node inserted
 
             req.init_next_round_input(self.tree_cache)
             res = adder.add_one_req(req, has_chunked_req=(self.chunked_req is not None))

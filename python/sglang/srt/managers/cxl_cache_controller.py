@@ -85,6 +85,9 @@ class CXLCacheController:
         self.layer_done_counter = None
         self.stop_event = threading.Event()
 
+        self.write_stream = torch.cuda.Stream()
+        self.load_stream = torch.cuda.Stream()
+
         self.prefetch_thread = threading.Thread(
             target=self.prefetch_thread_func, daemon=True
         )
@@ -99,9 +102,6 @@ class CXLCacheController:
 
         self.prefetch_thread.start()
         self.backup_thread.start()
-        
-        self.write_stream = torch.cuda.Stream()
-        self.load_stream = torch.cuda.Stream()
 
     def reset(self):
         self.stop_event.set()
