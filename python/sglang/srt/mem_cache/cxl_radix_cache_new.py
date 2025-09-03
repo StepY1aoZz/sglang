@@ -133,7 +133,7 @@ class CXLRadixCache(RadixCache):
         host_hit_length: int,
         mem_quota: Optional[int] = None,
     ):
-        assert False, "CXL Radix Cache should not load back."
+        raise RuntimeError("CXL Radix Cache should not load back.")
 
     def check_hicache_events(self):
         # Basically, we have two data transfer methods:
@@ -190,7 +190,12 @@ class CXLRadixCache(RadixCache):
         for _ in range(queue_size.item()):
             req_id, batch_id = self.cache_controller.prefetch_revoke_queue.get()
             if req_id in self.ongoing_prefetch:
-                last_host_node, _, _, _ = self.ongoing_prefetch[req_id]
+                last_host_node, _, device_indices, _ = self.ongoing_prefetch[req_id]
+                self.token_to_kv_pool_allocator.free(device_indices)
+                logger.info(
+                        f"Revoking prefetch for request {req_id}, "
+                        f"pool indices: {device_indices[:min(len(device_indices),10)]}... with length {len(device_indices)} due to insufficient hits."
+                    )
                 self.cxl_client.get_end(batch_id)
                 self.dec_lock_ref(last_host_node)
                 del self.ongoing_prefetch[req_id]
@@ -222,6 +227,7 @@ class CXLRadixCache(RadixCache):
         if device_indices is None:
             self.dec_lock_ref(last_host_node)
             return
+        logging.info(f"prefetch allocated {device_indices[:min(len(device_indices),10)]} with length {len(device_indices)} for {req_id}")
         self.prefetch_done_events[req_id] = threading.Event()
         operation = self.cache_controller.prefetch(
             req_id,
@@ -241,7 +247,11 @@ class CXLRadixCache(RadixCache):
         if req_id not in self.ongoing_prefetch:
             # there is no ongoing prefetch for this request or it has been revoked
             return
-        self.prefetch_done_events[req_id].wait(0.1)  # wait for all prefetch done
+        
+        self.prefetch_done_events[req_id].wait()  # wait for prefetch done or revoked
+
+        if req_id not in self.ongoing_prefetch:
+            return
 
         # todo: more policies for prefetch progress such as timeout
         # the current policy is to prefetch with best effort and terminate when queuing is over
@@ -273,9 +283,9 @@ class CXLRadixCache(RadixCache):
         )
         self.token_to_kv_pool_allocator.free(
             device_indices[:matched_length]
-        )  # FIXME: When many same req come together, we may do a lot useless copy here.
+        ) 
         self.token_to_kv_pool_allocator.free(
-            device_indices[min_completed_tokens:completed_tokens]
+            device_indices[min_completed_tokens:]
         )
         # NOTE: the matched_length to prefetch_length is freed in controller, dont
         # need to free here.

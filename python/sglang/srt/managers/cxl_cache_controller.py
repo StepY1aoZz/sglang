@@ -192,18 +192,14 @@ class CXLCacheController:
                     self.prefetch_revoke_queue.put(
                         (operation.request_id, operation.batch_id)
                     )
-                    self.mem_pool_device_allocator.free(operation.host_indices)
-                    logger.debug(
-                        f"Revoking prefetch for request {operation.request_id} due to insufficient hits ({storage_hit_count})."
-                    )
                     operation.done_event.set()
                 else:
                     operation.hash_value = hash_value[
                         : (storage_hit_count // self.page_size)
                     ]
-                    self.mem_pool_device_allocator.free(
-                        operation.host_indices[storage_hit_count:]
-                    )
+                    # self.mem_pool_device_allocator.free(
+                    #     operation.host_indices[storage_hit_count:]
+                    # )
                     operation.host_indices = operation.host_indices[:storage_hit_count]
                     operation.data = exist_result
                     logger.debug(
@@ -290,9 +286,9 @@ class CXLCacheController:
                     )
                 if not operation.increment(self.page_size):
                     # terminated
-                    self.mem_pool_device_allocator.free(
-                        indices[operation.completed_tokens :]
-                    )
+                    # self.mem_pool_device_allocator.free(
+                    #     indices[operation.completed_tokens :]
+                    # )
                     break
         elif isinstance(self.mem_pool_device, MLATokenToKVPool):
             for i in range(0, len(indices), self.page_size):
@@ -306,9 +302,9 @@ class CXLCacheController:
                     )
                 if not operation.increment(self.page_size):
                     # terminated
-                    self.mem_pool_device_allocator.free(
-                        indices[operation.completed_tokens :]
-                    )
+                    # self.mem_pool_device_allocator.free(
+                    #     indices[operation.completed_tokens :]
+                    # )
                     break
         else:
             raise ValueError("Unsupported memory pool device type")
