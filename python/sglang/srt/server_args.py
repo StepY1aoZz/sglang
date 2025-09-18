@@ -323,6 +323,8 @@ class ServerArgs:
     hicache_storage_backend_extra_config: Optional[str] = None
     # LMCache
     enable_lmcache: bool = False
+    # Mooncake Cache
+    enable_mooncake_cache: bool = False
 
     # Double Sparsity
     enable_double_sparsity: bool = False
@@ -1923,6 +1925,12 @@ class ServerArgs:
             "--enable-lmcache",
             action="store_true",
             help="Using LMCache as an alternative hierarchical cache solution",
+        )
+        # Mooncake Cache
+        parser.add_argument(
+            "--enable-mooncake-cache",
+            action="store_true",
+            help="Using Mooncake Cache as an alternative hierarchical cache solution",
         )
 
         # Double Sparsity

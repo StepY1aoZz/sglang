@@ -708,6 +708,22 @@ class Scheduler(
                     rank=self.tp_rank,
                     tp_group=self.tp_group,
                 )
+            elif server_args.enable_mooncake_cache:
+                from sglang.srt.mem_cache.mooncake_cache import (
+                    MooncakeRadixCache,
+                )
+
+                self.tree_cache = MooncakeRadixCache(
+                    req_to_token_pool=self.req_to_token_pool,
+                    token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+                    page_size=self.page_size,
+                    disable=server_args.disable_radix_cache,
+                    model_config=self.model_config,
+                    tp_size=self.tp_size,
+                    rank=self.tp_rank,
+                    model_name=server_args.served_model_name,
+                    tp_group=self.tp_group,
+                )
             else:
                 self.tree_cache = RadixCache(
                     req_to_token_pool=self.req_to_token_pool,
