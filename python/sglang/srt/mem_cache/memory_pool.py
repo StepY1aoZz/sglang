@@ -398,6 +398,9 @@ class KVCache(abc.ABC):
     def load_cpu_copy(self, kv_cache_cpu, indices):
         raise NotImplementedError()
 
+    def get_buf_infos_per_layer(self, slots: torch.Tensor):
+        raise NotImplementedError()
+
 
 class MHATokenToKVPool(KVCache):
 
@@ -477,11 +480,13 @@ class MHATokenToKVPool(KVCache):
             dtype=torch.uint64,
             device=self.device,
         )
+        self.k_data_ptrs_np = self.k_data_ptrs.cpu().numpy()
         self.v_data_ptrs = torch.tensor(
             [x.data_ptr() for x in self.v_buffer],
             dtype=torch.uint64,
             device=self.device,
         )
+        self.v_data_ptrs_np = self.v_data_ptrs.cpu().numpy()
         self.data_ptrs = torch.cat([self.k_data_ptrs, self.v_data_ptrs], dim=0)
         self.data_strides = torch.tensor(
             [
@@ -532,6 +537,33 @@ class MHATokenToKVPool(KVCache):
             for i in range(self.start_layer, self.start_layer + self.layer_num)
         ]
         return kv_data_ptrs, kv_data_lens, kv_item_lens
+
+    def get_buf_infos_per_layer(self, slots: torch.Tensor):
+        k_ptrs = []
+        k_lens = []
+        v_ptrs = []
+        v_lens = []
+        k_offsets = (
+            torch.outer(slots, self.data_strides[: self.layer_num]).to(dtype=torch.uint64).cpu().numpy()
+        )
+        v_offsets = (
+            torch.outer(slots, self.data_strides[self.layer_num :]).to(dtype=torch.uint64).cpu().numpy()
+        )
+        for offset in k_offsets:
+            k_ptrs.extend((self.k_data_ptrs_np + offset).tolist())
+        for offset in v_offsets:
+            v_ptrs.extend((self.v_data_ptrs_np + offset).tolist())
+        k_lens = [
+            self._get_key_buffer(i)[0].nbytes * self.page_size
+            for i in range(self.start_layer, self.start_layer + self.layer_num)
+        ] 
+        k_lens = k_lens * len(slots)
+        v_lens = [
+            self._get_value_buffer(i)[0].nbytes * self.page_size
+            for i in range(self.start_layer, self.start_layer + self.layer_num)
+        ]
+        v_lens = v_lens * len(slots)
+        return k_ptrs + v_ptrs, k_lens + v_lens
 
     def maybe_get_custom_mem_pool(self):
         return self.custom_mem_pool
@@ -1079,6 +1111,7 @@ class MLATokenToKVPool(KVCache):
             dtype=torch.uint64,
             device=self.device,
         )
+        self.data_ptrs_np = self.data_ptrs.cpu().numpy()
         self._finalize_allocation_log(size)
 
     def get_kv_size_bytes(self):
@@ -1184,6 +1217,18 @@ class MLATokenToKVPool(KVCache):
                 kv_chunk = kv_cpu.to(self.kv_buffer[0].device, non_blocking=True)
                 self.kv_buffer[layer_id][chunk_indices] = kv_chunk
         torch.cuda.synchronize()
+
+    def get_buf_infos_per_layer(self, slots: torch.Tensor):
+        kv_ptrs = []
+        kv_lens = []
+        kv_offsets = slots * self.kv_buffer[0][0].nbytes * self.page_size
+        for offset in kv_offsets:
+            kv_ptrs.extend((self.data_ptrs + offset).tolist())
+        kv_lens = [
+            self.kv_buffer[0][0].nbytes * self.page_size for _ in range(self.layer_num)
+        ]
+        kv_lens = kv_lens * len(slots)
+        return kv_ptrs, kv_lens
 
 
 class AscendMLAPagedTokenToKVPool(MLATokenToKVPool):
