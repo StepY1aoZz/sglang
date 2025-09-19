@@ -21,7 +21,9 @@ from sglang.srt.mem_cache.hicache_storage import get_hash_str
 DEBUG = True
 
 if DEBUG:
-    from sglang.srt.mem_cache.storage.mooncake_store.mock_mooncake_store import MooncakeStore
+    from sglang.srt.mem_cache.storage.mooncake_store.mock_mooncake_store import (
+        MooncakeStore,
+    )
 else:
     from sglang.srt.mem_cache.storage.mooncake_store.mooncake_store import MooncakeStore
 
@@ -34,8 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 class MooncakeRadixCache(RadixCache):
-    """RadixCache + Mooncake IO.
-    """
+    """RadixCache + Mooncake IO."""
 
     def __init__(
         self,
@@ -60,6 +61,9 @@ class MooncakeRadixCache(RadixCache):
 
         self.kvcache = self.token_to_kv_pool_allocator.get_kvcache()
 
+        self.tp_group = tp_group
+        self.tp_world_size = torch.distributed.get_world_size(group=self.tp_group)
+
         self.load_stream = torch.cuda.Stream()
         self.store_stream = torch.cuda.Stream()
 
@@ -81,6 +85,7 @@ class MooncakeRadixCache(RadixCache):
             model_name=model_name,
         )
         self.storage = MooncakeStore(config)
+        self.local_rank = rank
 
         self._in_flight_nodes: list[TreeNode] = []
         self._node_lock = threading.Lock()
@@ -92,8 +97,7 @@ class MooncakeRadixCache(RadixCache):
                 self._in_flight_nodes.clear()
 
     def match_prefix(self, key: List[int], **kwargs) -> MatchResult:  # type: ignore[override]
-        """Match cached prefix; if there's a tail miss, prefetch from Mooncake.
-        """
+        """Match cached prefix; if there's a tail miss, prefetch from Mooncake."""
         if self.disable or not key:
             return super().match_prefix(key, **kwargs)
 
@@ -122,17 +126,51 @@ class MooncakeRadixCache(RadixCache):
 
         hashes = self._calc_keys_hash(key[len(value) :], last_hash)
 
-        num_exists = self.storage.batch_exists(hashes)
-        logger.debug("num_retrieved_tokens: %s", num_exists)
+        hashes_to_query = [
+            f"{h}_{l}"
+            for h in hashes
+            for l in range(
+                self.kvcache.start_layer,
+                self.kvcache.start_layer + self.kvcache.layer_num,
+            )
+        ]
+        num_exists = self.storage.batch_exists(hashes_to_query)
+        if num_exists % self.kvcache.layer_num != 0:
+            logger.warning(
+                "Existing tokens %d is not aligned with layer num %d, aborted",
+                num_exists,
+                self.kvcache.layer_num,
+            )
+            num_exists = 0
         if num_exists == 0:
             self.token_to_kv_pool_allocator.free(token_slots)
             return base_res
+
+        num_exists = num_exists // self.kvcache.layer_num
+        logger.debug("num_retrieved_tokens: %s", num_exists)
+        if self.page_size != 1:
+            token_slots = token_slots[:: self.page_size]
+
+        if self.tp_world_size > 1:
+            num_exists_ts = torch.tensor(num_exists, dtype=torch.int, device="cpu")
+            torch.distributed.all_reduce(
+                num_exists_ts, op=torch.distributed.ReduceOp.MIN, group=self.tp_group
+            )
+            num_exists = num_exists_ts.item()
 
         self.token_to_kv_pool_allocator.free(token_slots[num_exists:])
         hashes = hashes[:num_exists]
         token_slots = token_slots[:num_exists]
         data_ptr, lengths = self.kvcache.get_buf_infos_per_layer(token_slots)
         fetched = self._load_kv_from_mooncake(token_slots, lengths, data_ptr, hashes)
+
+        if self.tp_world_size > 1:
+            fetched_ts = torch.tensor(fetched, dtype=torch.int, device="cpu")
+            torch.distributed.all_reduce(
+                fetched_ts, op=torch.distributed.ReduceOp.MIN, group=self.tp_group
+            )
+            fetched = fetched_ts.item()
+
         if fetched % self.kvcache.layer_num != 0:
             logger.warning(
                 "Fetched tokens %d is not aligned with layer num %d, aborted",
@@ -181,8 +219,9 @@ class MooncakeRadixCache(RadixCache):
 
         super().cache_finished_req(req)
 
-
-        _, new_last_node, _, _ = self.match_prefix(req.origin_input_ids) # store the prefill tokens
+        _, new_last_node, _, _ = self.match_prefix(
+            req.origin_input_ids
+        )  # store the prefill tokens
         assert new_last_node is not None
 
         self.inc_lock_ref(new_last_node)
@@ -222,8 +261,8 @@ class MooncakeRadixCache(RadixCache):
             )
         ]
         if not self.is_mla:
-            hashes = [f"{h}_k" for h in hashes] + [
-                f"{h}_v" for h in hashes
+            hashes = [f"{h}_{self.local_rank}_k" for h in hashes] + [
+                f"{h}_{self.local_rank}_v" for h in hashes
             ]  # length is 2*num_exists
         else:
             hashes = [
@@ -252,13 +291,11 @@ class MooncakeRadixCache(RadixCache):
             )
         ]
         if not self.is_mla:
-            hashes = [f"{h}_k" for h in hashes] + [
-                f"{h}_v" for h in hashes
+            hashes = [f"{h}_{self.local_rank}_k" for h in hashes] + [
+                f"{h}_{self.local_rank}_v" for h in hashes
             ]  # length is 2*num_exists
         else:
-            hashes = [
-                f"{h}_k" for h in hashes
-            ]
+            hashes = [f"{h}_k" for h in hashes]
 
         num_copied = self.storage.batch_set(
             hashes,
