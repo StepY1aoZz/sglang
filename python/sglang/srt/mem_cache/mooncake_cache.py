@@ -18,7 +18,7 @@ from sglang.srt.mem_cache.radix_cache import RadixCache, TreeNode
 from sglang.srt.mem_cache.hicache_storage import HiCacheStorageConfig
 from sglang.srt.mem_cache.hicache_storage import get_hash_str
 
-DEBUG = True
+DEBUG = False
 
 if DEBUG:
     from sglang.srt.mem_cache.storage.mooncake_store.mock_mooncake_store import (
@@ -62,7 +62,7 @@ class MooncakeRadixCache(RadixCache):
         self.kvcache = self.token_to_kv_pool_allocator.get_kvcache()
 
         self.tp_group = tp_group
-        self.tp_world_size = torch.distributed.get_world_size(group=self.tp_group)
+        self.tp_world_size = torch.distributed.get_world_size()
 
         self.load_stream = torch.cuda.Stream()
         self.store_stream = torch.cuda.Stream()
@@ -134,43 +134,42 @@ class MooncakeRadixCache(RadixCache):
                 self.kvcache.start_layer + self.kvcache.layer_num,
             )
         ]
-        num_exists = self.storage.batch_exists(hashes_to_query)
-        if num_exists % self.kvcache.layer_num != 0:
+        page_exists = self.storage.batch_exists(hashes_to_query)
+        if page_exists % self.kvcache.layer_num != 0:
             logger.warning(
                 "Existing tokens %d is not aligned with layer num %d, aborted",
-                num_exists,
+                page_exists,
                 self.kvcache.layer_num,
             )
-            num_exists = 0
-        if num_exists == 0:
+            page_exists = 0
+        if page_exists == 0:
             self.token_to_kv_pool_allocator.free(token_slots)
             return base_res
 
-        num_exists = num_exists // self.kvcache.layer_num
-        logger.debug("num_retrieved_tokens: %s", num_exists)
-        if self.page_size != 1:
-            token_slots = token_slots[:: self.page_size]
+        page_exists = page_exists // self.kvcache.layer_num
+        logger.debug("num_retrieved_tokens: %s", page_exists)
 
         if self.tp_world_size > 1:
-            num_exists_ts = torch.tensor(num_exists, dtype=torch.int, device="cpu")
+            num_exists_ts = torch.tensor(page_exists, dtype=torch.int, device="cpu")
             torch.distributed.all_reduce(
                 num_exists_ts, op=torch.distributed.ReduceOp.MIN, group=self.tp_group
             )
-            num_exists = num_exists_ts.item()
+            page_exists = num_exists_ts.item()
 
-        self.token_to_kv_pool_allocator.free(token_slots[num_exists:])
-        hashes = hashes[:num_exists]
-        token_slots = token_slots[:num_exists]
-        data_ptr, lengths = self.kvcache.get_buf_infos_per_layer(token_slots)
-        fetched = self._load_kv_from_mooncake(token_slots, lengths, data_ptr, hashes)
-
+        key_exists = page_exists * self.page_size
+        self.token_to_kv_pool_allocator.free(token_slots[key_exists:])
+        hashes = hashes[:page_exists]
+        token_slots = token_slots[:key_exists]
+        data_ptr, lengths = self.kvcache.get_buf_infos_per_layer(
+            token_slots[:: self.page_size]
+        )
+        fetched = self._load_kv_from_mooncake(lengths, data_ptr, hashes)
         if self.tp_world_size > 1:
             fetched_ts = torch.tensor(fetched, dtype=torch.int, device="cpu")
             torch.distributed.all_reduce(
                 fetched_ts, op=torch.distributed.ReduceOp.MIN, group=self.tp_group
             )
             fetched = fetched_ts.item()
-
         if fetched % self.kvcache.layer_num != 0:
             logger.warning(
                 "Fetched tokens %d is not aligned with layer num %d, aborted",
@@ -181,24 +180,26 @@ class MooncakeRadixCache(RadixCache):
         if fetched == 0:
             self.token_to_kv_pool_allocator.free(token_slots)
             return base_res
-        if fetched != num_exists:
-            self.token_to_kv_pool_allocator.free(token_slots[fetched:num_exists])
+        fetched = fetched // self.kvcache.layer_num
 
         new_node = TreeNode()
         start = value.numel()
-        end = start + fetched
+        key_fetched = fetched * self.page_size
+        end = start + key_fetched
         new_node.key = key[start:end]
-        new_node.value = token_slots[:fetched]
+        new_node.value = token_slots[:key_fetched]
         new_node.parent = last_node
         new_node.hash_value = hashes[:fetched]
         last_node.children[self.get_child_key_fn(new_node.key)] = new_node
         last_node = new_node
 
-        value = torch.cat([value, token_slots[:fetched]])
-        self.evictable_size_ += fetched
-
+        value = torch.cat([value, new_node.value])
+        self.evictable_size_ += key_fetched
         self._record_store_event(new_node.parent)
         self._record_store_event(new_node)
+
+        if key_fetched < key_exists:
+            self.token_to_kv_pool_allocator.free(token_slots[key_fetched:])
 
         return MatchResult(
             device_indices=value,
@@ -227,7 +228,9 @@ class MooncakeRadixCache(RadixCache):
         self.inc_lock_ref(new_last_node)
         slots = new_last_node.value
         keys = new_last_node.hash_value
-        data_ptr, lengths = self.kvcache.get_buf_infos_per_layer(slots)
+        data_ptr, lengths = self.kvcache.get_buf_infos_per_layer(
+            slots[:: self.page_size]
+        )
         with torch.cuda.stream(self.store_stream):
             self._backup_kv_to_mooncake(lengths, data_ptr, keys)
         with self._node_lock:
@@ -281,7 +284,7 @@ class MooncakeRadixCache(RadixCache):
         lengths: List[int],
         data_ptr: List[int],
         hashes: List[str],
-    ) -> int:
+    ) -> bool:
         hashes = [
             f"{h}_{l}"
             for h in hashes
@@ -297,12 +300,12 @@ class MooncakeRadixCache(RadixCache):
         else:
             hashes = [f"{h}_k" for h in hashes]
 
-        num_copied = self.storage.batch_set(
+        is_success = self.storage.batch_set(
             hashes,
             target_locations=data_ptr,
             target_sizes=lengths,
         )
-        return num_copied
+        return is_success
 
     def _insert_helper(self, node: TreeNode, key: List, value):
         node.last_access_time = time.monotonic()
