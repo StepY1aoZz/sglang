@@ -195,12 +195,8 @@ class MooncakeRadixCache(RadixCache):
 
         super().cache_finished_req(req)
 
-        token_ids = (req.origin_input_ids + req.output_ids)[:-1]
-        kv_indices = self.req_to_token_pool.req_to_token[
-            req.req_pool_idx, : len(token_ids)
-        ]
 
-        _, new_last_node, _, _ = self.match_prefix(token_ids)
+        _, new_last_node, _, _ = self.match_prefix(req.origin_input_ids) # store the prefill tokens
         assert new_last_node is not None
 
         self.inc_lock_ref(new_last_node)
@@ -231,6 +227,14 @@ class MooncakeRadixCache(RadixCache):
         data_ptr: List[int],
         hashes: List[str],
     ) -> int:
+        hashes = [
+            f"{h}_{l}"
+            for h in hashes
+            for l in range(
+                self.kvcache.start_layer,
+                self.kvcache.start_layer + self.kvcache.layer_num,
+            )
+        ]
         if not self.is_mla:
             hashes = [f"{h}_k" for h in hashes] + [
                 f"{h}_v" for h in hashes

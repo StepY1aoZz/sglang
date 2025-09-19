@@ -1223,7 +1223,7 @@ class MLATokenToKVPool(KVCache):
         kv_lens = []
         kv_offsets = slots * self.kv_buffer[0][0].nbytes * self.page_size
         for offset in kv_offsets:
-            kv_ptrs.extend((self.data_ptrs + offset).tolist())
+            kv_ptrs.extend((self.data_ptrs_np + offset.item()).tolist())
         kv_lens = [
             self.kv_buffer[0][0].nbytes * self.page_size for _ in range(self.layer_num)
         ]
