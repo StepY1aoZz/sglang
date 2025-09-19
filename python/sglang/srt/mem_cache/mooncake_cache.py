@@ -34,15 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class MooncakeRadixCache(RadixCache):
-    """RadixCache + LMCache IO.
-
-    This subclass adds:
-      - LMCache connector setup (device/host buffers, TP rank/size)
-      - Two CUDA streams for async load/store
-      - Layer-wise transfer executor wiring to the KV cache
-      - Overridden `match_prefix` to fetch missing prefix chunks from LMCache
-      - Extended cache_finalization paths to store back into LMCache
-      - Eviction barrier that respects any in-flight host->device stores
+    """RadixCache + Mooncake IO.
     """
 
     def __init__(
@@ -100,13 +92,7 @@ class MooncakeRadixCache(RadixCache):
                 self._in_flight_nodes.clear()
 
     def match_prefix(self, key: List[int], **kwargs) -> MatchResult:  # type: ignore[override]
-        """Match cached prefix; if there's a tail miss, prefetch from LMCache.
-
-        Reuses the base matching logic to obtain (value, last_node). If there
-        remains a *page-aligned* uncached suffix and there is room (or after
-        eviction), we allocate token slots and trigger an async LMCache load
-        into those slots, then materialize a new child node for the retrieved
-        chunk.
+        """Match cached prefix; if there's a tail miss, prefetch from Mooncake.
         """
         if self.disable or not key:
             return super().match_prefix(key, **kwargs)
@@ -191,7 +177,7 @@ class MooncakeRadixCache(RadixCache):
         return hashes
 
     def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
-        """On request completion, insert device KV into radix and store to LMCache."""
+        """On request completion, insert device KV into radix and store to Mooncake."""
 
         super().cache_finished_req(req)
 
