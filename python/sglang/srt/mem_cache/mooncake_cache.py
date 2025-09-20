@@ -85,6 +85,13 @@ class MooncakeRadixCache(RadixCache):
             model_name=model_name,
         )
         self.storage = MooncakeStore(config)
+        self.start_layer, self.end_layer = self.kvcache.start_layer, self.kvcache.start_layer + self.kvcache.layer_num
+        for i in range(self.start_layer, self.end_layer):
+            if self.is_mla:
+                self.storage.register_buffer(self.kvcache.get_key_buffer(i))
+            else:
+                self.storage.register_buffer(self.kvcache.get_key_buffer(i))
+                self.storage.register_buffer(self.kvcache.get_value_buffer(i))
         self.local_rank = rank
 
         self._in_flight_nodes: list[TreeNode] = []
@@ -130,8 +137,8 @@ class MooncakeRadixCache(RadixCache):
             f"{h}_{l}"
             for h in hashes
             for l in range(
-                self.kvcache.start_layer,
-                self.kvcache.start_layer + self.kvcache.layer_num,
+                self.start_layer,
+                self.end_layer,
             )
         ]
         page_exists = self.storage.batch_exists(hashes_to_query)
@@ -259,8 +266,8 @@ class MooncakeRadixCache(RadixCache):
             f"{h}_{l}"
             for h in hashes
             for l in range(
-                self.kvcache.start_layer,
-                self.kvcache.start_layer + self.kvcache.layer_num,
+                self.start_layer,
+                self.end_layer,
             )
         ]
         if not self.is_mla:
@@ -289,8 +296,8 @@ class MooncakeRadixCache(RadixCache):
             f"{h}_{l}"
             for h in hashes
             for l in range(
-                self.kvcache.start_layer,
-                self.kvcache.start_layer + self.kvcache.layer_num,
+                self.start_layer,
+                self.end_layer,
             )
         ]
         if not self.is_mla:
